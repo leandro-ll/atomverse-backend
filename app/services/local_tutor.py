@@ -23,12 +23,48 @@ LIMITATION_ID_TEXT = (
     "persamaan reaksi, pereaksi pembatas, atau kesetimbangan kelarutan (Ksp)."
 )
 
+LIMITATION_EN_TEXT = (
+    "This question is outside the scope of the current chemical simulation. "
+    "You can ask about precipitation reactions, acid-base neutralization, "
+    "reaction equations, limiting reagents, or solubility product equilibrium (Ksp)."
+)
+
 SUPPORTED_SUGGESTIONS = (
     "Apa reaksi yang terjadi antara kedua larutan?",
     "Berapa pH campuran akhir?",
     "Apakah terbentuk endapan?",
     "Tunjukkan persamaan reaksi ion bersih",
 )
+
+SUPPORTED_SUGGESTIONS_EN = (
+    "What reaction occurs between the two solutions?",
+    "What is the final pH of the mixture?",
+    "Does a precipitate form?",
+    "Show the net ionic equation",
+)
+
+
+def is_english_text(message: str) -> bool:
+    """Heuristic check to determine if student asked in English."""
+    msg_lower = (message or "").lower()
+    en_words = {
+        "what", "how", "why", "is", "are", "does", "will", "can", "tell", "explain",
+        "the", "this", "that", "reaction", "precipitate", "solution", "color", "mixing",
+        "between", "formed", "produce", "happen", "happens", "acid", "base", "limiting",
+        "temperature", "ph", "particles", "atoms", "ions", "equation", "equations",
+        "formula", "yield", "excess", "solubility", "neutral", "neutralization", "solid"
+    }
+    id_words = {
+        "apakah", "bagaimana", "mengapa", "apa", "terbentuk", "larutan", "endapan",
+        "suhu", "reaksi", "pereaksi", "persamaan", "kisi", "kristal", "pembatas", "jenuh", "kuning"
+    }
+    tokens = set(re.findall(r"\b[a-z]+\b", msg_lower))
+    en_matches = len(tokens.intersection(en_words))
+    id_matches = len(tokens.intersection(id_words))
+
+    if en_matches > id_matches:
+        return True
+    return False
 
 
 class FallbackIntent(StrEnum):
@@ -88,37 +124,55 @@ def _get_substance(sub_id: str, catalog: Mapping[str, Any]) -> Mapping[str, Any]
 
 
 def classify_intent(message: str, result: Optional[Mapping[str, Any]] = None) -> FallbackIntent:
-    """Keyword-plus-result intent classification."""
+    """Keyword-plus-result intent classification (Bilingual: ID & EN)."""
     msg_lower = (message or "").lower()
 
     # Specific educational intents
-    if any(k in msg_lower for k in ["persamaan", "reaksi ion", "net ionic", "molekul", "rumus reaksi"]):
+    if any(k in msg_lower for k in [
+        "persamaan", "reaksi ion", "net ionic", "molekul", "rumus reaksi",
+        "equation", "equations", "net-ionic", "reaction formula", "chemical formula"
+    ]):
         return FallbackIntent.EQUATIONS
 
-    if any(k in msg_lower for k in ["pembatas", "limiting", "pereaksi sisa", "habis bereaksi", "stoikiometri"]):
+    if any(k in msg_lower for k in [
+        "pembatas", "limiting", "pereaksi sisa", "habis bereaksi", "stoikiometri",
+        "excess", "stoichiometry", "limiting reagent", "limiting reactant"
+    ]):
         return FallbackIntent.LIMITING_REAGENT
 
-    if any(k in msg_lower for k in ["ksp", "kelarutan", "jenuh", "mengendap", "hasil kali ion", "nilai q"]):
+    if any(k in msg_lower for k in [
+        "ksp", "kelarutan", "jenuh", "mengendap", "hasil kali ion", "nilai q",
+        "solubility", "saturated", "saturation", "precipitate", "q-value", "q value"
+    ]):
         return FallbackIntent.SATURATION
 
-    if any(k in msg_lower for k in ["ph", "asam", "basa", "netral", "derajat keasaman"]):
+    if any(k in msg_lower for k in [
+        "ph", "asam", "basa", "netral", "derajat keasaman",
+        "acid", "base", "neutral", "neutralize", "neutralization", "acidity"
+    ]):
         return FallbackIntent.PH_BOUNDARY
 
-    if any(k in msg_lower for k in ["partikel", "submikro", "mikroskopik", "kisi", "kristal", "gerak ion"]):
+    if any(k in msg_lower for k in [
+        "partikel", "submikro", "mikroskopik", "kisi", "kristal", "gerak ion",
+        "particle", "particles", "submicroscopic", "molecular", "lattice", "crystal"
+    ]):
         return FallbackIntent.PARTICLE_VIEW
 
-    if any(k in msg_lower for k in ["asumsi", "model", "tekanan", "batas", "lingkup simulasi"]):
+    if any(k in msg_lower for k in [
+        "asumsi", "model", "tekanan", "batas", "lingkup simulasi",
+        "assumption", "assumptions", "boundary", "boundaries", "scope", "pressure", "simulation model"
+    ]):
         return FallbackIntent.MODEL_BOUNDARY
 
     # Out of scope keywords (topics not in current catalog phase)
     out_of_scope_patterns = [
         r"\b(redoks|redox)\b",
-        r"\b(gas|karbon dioksida|co2|oksigen|o2)\b",
-        r"\b(organik|hidrokarbon|alkana|alkena)\b",
-        r"\b(baterai|sel galvani|elektrolisis|katoda|anoda)\b",
-        r"\b(harga|beli|toko|pasar)\b",
-        r"\b(penemu|sejarah|biografi)\b",
-        r"\b(cuaca|suhu bumi|iklim global)\b",
+        r"\b(gas|karbon dioksida|co2|oksigen|o2|oxygen)\b",
+        r"\b(organik|organic|hidrokarbon|hydrocarbon|alkana|alkena)\b",
+        r"\b(baterai|battery|batteries|sel galvani|galvanic|elektrolisis|electrolysis|katoda|cathode|anoda|anode)\b",
+        r"\b(harga|beli|price|cost|buy|shop|store|toko|pasar)\b",
+        r"\b(penemu|inventor|sejarah|history|biografi|biography)\b",
+        r"\b(cuaca|weather|suhu bumi|climate|iklim global)\b",
     ]
     for pattern in out_of_scope_patterns:
         if re.search(pattern, msg_lower):
@@ -126,6 +180,10 @@ def classify_intent(message: str, result: Optional[Mapping[str, Any]] = None) ->
 
     return FallbackIntent.CURRENT_OUTCOME
 
+
+# ---------------------------------------------------------
+# INDONESIAN COMPOSERS (PRESERVED VERBATIM FOR COMPATIBILITY)
+# ---------------------------------------------------------
 
 def compose_below_saturation(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
     """Indonesian explanation for below_saturation state citing authored Ksp and Q."""
@@ -293,6 +351,158 @@ COMPOSERS: dict[FallbackIntent, Callable[[Mapping[str, Any], Mapping[str, Any]],
 }
 
 
+# ---------------------------------------------------------
+# ENGLISH COMPOSERS
+# ---------------------------------------------------------
+
+def compose_below_saturation_en(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
+    cand_id = result.get("candidateSolidId") or result.get("productId") or ""
+    solid = _get_substance(cand_id, catalog)
+    solid_unicode = solid.get("notation", {}).get("unicode", cand_id)
+
+    q_val = result.get("QApprox", 0.0)
+    q_str = fmt_sci(q_val)
+
+    ksp_literal = result.get("kspLiteral")
+    if not ksp_literal and result.get("kspRef"):
+        ksp_literal = result["kspRef"].get("value", "-")
+    ksp_literal = ksp_literal or "-"
+
+    return (
+        f"At the specified quantities, {solid_unicode} does not precipitate. "
+        f"The ion product quotient Q = {q_str} is still less than the solubility product constant "
+        f"Ksp = {ksp_literal}. Precipitation will only occur when Q exceeds Ksp."
+    )
+
+
+def compose_current_outcome_en(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
+    outcome = result.get("outcome")
+
+    sub_a = _get_substance(result.get("reagentAId", ""), catalog)
+    sub_b = _get_substance(result.get("reagentBId", ""), catalog)
+    uni_a = sub_a.get("notation", {}).get("unicode") or sub_a.get("formulaToken") or str(result.get("reagentAId", ""))
+    uni_b = sub_b.get("notation", {}).get("unicode") or sub_b.get("formulaToken") or str(result.get("reagentBId", ""))
+
+    if outcome == "precipitate_forms":
+        cand_id = result.get("candidateSolidId") or result.get("productId") or ""
+        prod = _get_substance(cand_id, catalog)
+        prod_uni = prod.get("notation", {}).get("unicode") or prod.get("formulaToken") or cand_id
+        net_ionic = result.get("netIonicEquation", "")
+
+        limiting_id = (result.get("ledger") or {}).get("limitingId") or result.get("limitingReagentId")
+        lim_sub = _get_substance(limiting_id, catalog) if limiting_id else None
+        lim_uni = (lim_sub.get("notation", {}).get("unicode") or lim_sub.get("formulaToken") or limiting_id) if lim_sub else ""
+        lim_text = f" Limiting reagent: {lim_uni}." if lim_uni else ""
+
+        return (
+            f"{uni_a} and {uni_b} react to form an insoluble precipitate of {prod_uni}. "
+            f"Net ionic equation: {net_ionic}.{lim_text}"
+        )
+
+    if outcome == "below_saturation":
+        return compose_below_saturation_en(result, catalog)
+
+    if outcome == "neutralization":
+        net_ionic = result.get("netIonicEquation", "")
+        ph_info = result.get("pH", {})
+        ph_val = ph_info.get("value")
+        ph_str = f" with a final pH of ~{ph_val:.2f}" if ph_val is not None else ""
+        return (
+            f"{uni_a} and {uni_b} undergo an exothermic acid-base neutralization reaction{ph_str}. "
+            f"Net ionic equation: {net_ionic}."
+        )
+
+    if outcome == "no_modeled_reaction":
+        return (
+            f"The mixture of {uni_a} and {uni_b} exhibits no observable reaction; "
+            "all ions remain freely dissolved in aqueous solution as spectator ions."
+        )
+
+    if outcome == "unsupported":
+        return "This combination of reagents is not yet modeled in the current catalog version."
+
+    return f"The mixture of {uni_a} and {uni_b} is in solution equilibrium."
+
+
+def compose_equations_en(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
+    mol_eq = result.get("molecularEquation")
+    net_eq = result.get("netIonicEquation")
+
+    if mol_eq and net_eq:
+        return f"Molecular equation: {mol_eq}\nNet ionic equation: {net_eq}"
+    if mol_eq:
+        return f"Reaction equation: {mol_eq}"
+    return "No chemical reaction equation applies for this pair because all products remain dissolved."
+
+
+def compose_limiting_reagent_en(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
+    ledger = result.get("ledger") or {}
+    limiting_id = ledger.get("limitingId") or result.get("limitingReagentId")
+
+    if not limiting_id:
+        return "There is no limiting reagent in this trial because the solutions do not react or are present in exact stoichiometric proportions."
+
+    lim_sub = _get_substance(limiting_id, catalog)
+    lim_uni = lim_sub.get("notation", {}).get("unicode", limiting_id)
+
+    excess_id = ledger.get("excessId")
+    excess_text = ""
+    if excess_id:
+        exc_sub = _get_substance(excess_id, catalog)
+        exc_uni = exc_sub.get("notation", {}).get("unicode", excess_id)
+        excess_text = f" Meanwhile, {exc_uni} is the excess reagent."
+
+    return (
+        f"The limiting reagent in this reaction is {lim_uni} as it is consumed completely first, "
+        f"governing the maximum amount of precipitate or product formed.{excess_text}"
+    )
+
+
+def compose_ph_en(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
+    ph_data = result.get("pH") or {}
+    if ph_data.get("supported") and ph_data.get("value") is not None:
+        ph_val = float(ph_data["value"])
+        desc = "neutral" if abs(ph_val - 7.0) < 0.1 else "acidic" if ph_val < 7.0 else "basic"
+        return f"The mixture has a calculated pH of {ph_val:.2f} ({desc})."
+
+    msg = ph_data.get("message")
+    if msg:
+        return f"pH Calculation: {msg}"
+    return "The pH for this solution mixture is not modeled in the current simulation phase."
+
+
+def compose_particle_view_en(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
+    outcome = result.get("outcome")
+    if outcome == "precipitate_forms":
+        return (
+            "At the submicroscopic level, strongly attracting counter-ions collide, leave solution, "
+            "and assemble into an orderly crystalline lattice that aggregates as solid precipitate."
+        )
+    return (
+        "At the submicroscopic level, ions from both solutions remain hydrated, moving freely "
+        "among water molecules without nucleating a crystal lattice."
+    )
+
+
+def compose_model_boundary_en(result: Mapping[str, Any], catalog: Mapping[str, Any]) -> str:
+    return (
+        "Atomverse's model covers aqueous metathesis reactions, solubility equilibria (Ksp) at 25°C, "
+        "and strong acid-base stoichiometry. Complex redox cycles and weak acid buffering "
+        "fall outside this simulation phase."
+    )
+
+
+COMPOSERS_EN: dict[FallbackIntent, Callable[[Mapping[str, Any], Mapping[str, Any]], str]] = {
+    FallbackIntent.CURRENT_OUTCOME: compose_current_outcome_en,
+    FallbackIntent.EQUATIONS: compose_equations_en,
+    FallbackIntent.LIMITING_REAGENT: compose_limiting_reagent_en,
+    FallbackIntent.SATURATION: compose_below_saturation_en,
+    FallbackIntent.PH_BOUNDARY: compose_ph_en,
+    FallbackIntent.PARTICLE_VIEW: compose_particle_view_en,
+    FallbackIntent.MODEL_BOUNDARY: compose_model_boundary_en,
+}
+
+
 def build_chat_fallback(
     message: str,
     lab_state: Optional[Mapping[str, Any]] = None,
@@ -322,7 +532,10 @@ def build_chat_fallback(
             "temperatureC": temp_c,
         }
         try:
-            result = evaluate_experiment(catalog, exp_input)
+            res_dict = dict(evaluate_experiment(catalog, exp_input))
+            res_dict["reagentAId"] = reagent_a
+            res_dict["reagentBId"] = reagent_b
+            result = res_dict
         except Exception:
             result = {
                 "outcome": "no_modeled_reaction",
@@ -331,18 +544,20 @@ def build_chat_fallback(
             }
 
     intent = classify_intent(message, result)
+    is_en = is_english_text(message)
 
     if intent == FallbackIntent.OUT_OF_SCOPE:
         return FallbackReply(
-            text=LIMITATION_ID_TEXT,
+            text=LIMITATION_EN_TEXT if is_en else LIMITATION_ID_TEXT,
             scope="unsupported",
             catalog_version=catalog.get("catalogVersion", CATALOG_VERSION),
             degraded=True,
             reason_code="provider_unavailable",
-            suggestions=SUPPORTED_SUGGESTIONS,
+            suggestions=SUPPORTED_SUGGESTIONS_EN if is_en else SUPPORTED_SUGGESTIONS,
         )
 
-    composer = COMPOSERS.get(intent, compose_current_outcome)
+    composers = COMPOSERS_EN if is_en else COMPOSERS
+    composer = composers.get(intent, compose_current_outcome_en if is_en else compose_current_outcome)
     reply_text = composer(result, catalog)
 
     return FallbackReply(
@@ -352,5 +567,6 @@ def build_chat_fallback(
         catalog_version=catalog.get("catalogVersion", CATALOG_VERSION),
         degraded=True,
         reason_code="provider_unavailable",
-        suggestions=SUPPORTED_SUGGESTIONS,
+        suggestions=SUPPORTED_SUGGESTIONS_EN if is_en else SUPPORTED_SUGGESTIONS,
     )
+

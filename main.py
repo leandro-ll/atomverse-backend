@@ -56,19 +56,23 @@ async def chat_with_tutor(request: ChatRequest):
         gemini_status = "fallback"
         return fallback_reply.to_dict()
 
-    prompt = f"""Kamu adalah AI Adaptive Chemistry Tutor untuk platform ATOMVERSE.
+    prompt = f"""You are the AI Adaptive Chemistry Tutor for ATOMVERSE, an interactive virtual chemistry lab.
 
-KONTEKS EKSPERIMEN SAAT INI:
-- Larutan A: {request.lab_state.get('reagentA', 'Tidak ada')}
-- Larutan B: {request.lab_state.get('reagentB', 'Tidak ada')}
-- Suhu: {request.lab_state.get('temp', 25)}°C
-- Status: {request.lab_state.get('status', 'Belum dijalankan')}
+CURRENT EXPERIMENT CONTEXT:
+- Solution A: {request.lab_state.get('reagentA', 'None')}
+- Solution B: {request.lab_state.get('reagentB', 'None')}
+- Temperature: {request.lab_state.get('temp', 25)}°C
+- Status: {request.lab_state.get('status', 'Not Run')}
 
-Jawab pertanyaan siswa dalam bahasa Indonesia secara natural dan edukatif dalam 2-3 kalimat.
-Hubungkan dengan konsep Johnstone's Triangle jika relevan. Untuk persamaan kimia gunakan
-state symbols (aq), (s), (l), atau (g), dan gunakan -> sebagai tanda panah.
+INSTRUCTIONS:
+1. Detect the language of the student's question (English or Indonesian) and respond in that exact language:
+   - If the student writes in English, reply in natural, supportive, and educational English.
+   - If the student writes in Indonesian, reply in natural, supportive, and educational Indonesian.
+2. Keep your explanation concise (2-3 sentences), educational, and directly relevant to the current experiment.
+3. Connect with Johnstone's Triangle levels (Macroscopic observation, Submicroscopic particle dynamics, and Symbolic equations) where helpful.
+4. For chemical equations, use standard state symbols: (aq), (s), (l), or (g), and use -> for reaction arrows.
 
-Pertanyaan siswa: {request.message}
+Student question: {request.message}
 """
 
     try:
