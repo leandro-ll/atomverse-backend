@@ -508,6 +508,7 @@ def build_chat_fallback(
     lab_state: Optional[Mapping[str, Any]] = None,
     result: Optional[Mapping[str, Any]] = None,
     catalog: Mapping[str, Any] = CATALOG,
+    force_en: bool = False,
 ) -> FallbackReply:
     """Builds an educational tutor reply derived from catalog facts and experiment state."""
     lab_state = lab_state or {}
@@ -544,7 +545,7 @@ def build_chat_fallback(
             }
 
     intent = classify_intent(message, result)
-    is_en = is_english_text(message)
+    is_en = force_en or is_english_text(message)
 
     if intent == FallbackIntent.OUT_OF_SCOPE:
         return FallbackReply(

@@ -51,7 +51,7 @@ from app.services.local_tutor import build_chat_fallback
 async def chat_with_tutor(request: ChatRequest):
     global gemini_status
 
-    fallback_reply = build_chat_fallback(request.message, request.lab_state)
+    fallback_reply = build_chat_fallback(request.message, request.lab_state, force_en=True)
     if genai_client is None:
         gemini_status = "fallback"
         return fallback_reply.to_dict()
@@ -65,12 +65,10 @@ CURRENT EXPERIMENT CONTEXT:
 - Status: {request.lab_state.get('status', 'Not Run')}
 
 INSTRUCTIONS:
-1. Detect the language of the student's question (English or Indonesian) and respond in that exact language:
-   - If the student writes in English, reply in natural, supportive, and educational English.
-   - If the student writes in Indonesian, reply in natural, supportive, and educational Indonesian.
-2. Keep your explanation concise (2-3 sentences), educational, and directly relevant to the current experiment.
-3. Connect with Johnstone's Triangle levels (Macroscopic observation, Submicroscopic particle dynamics, and Symbolic equations) where helpful.
-4. For chemical equations, use standard state symbols: (aq), (s), (l), or (g), and use -> for reaction arrows.
+1. You must ALWAYS reply strictly in clear, fluent, and educational English, regardless of the language the student types.
+2. Provide a helpful, concise explanation in 2-3 sentences explaining the chemical reaction or principles.
+3. Connect with Johnstone's Triangle levels (Macroscopic visual observation, Submicroscopic particle collisions, and Symbolic formulas) where helpful.
+4. For all chemical equations, include state symbols: (aq), (s), (l), or (g), using -> for reaction arrows.
 
 Student question: {request.message}
 """
