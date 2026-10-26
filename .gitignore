@@ -1,0 +1,23 @@
+# Environment variables
+.env
+.env*
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python caches & bytecode
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

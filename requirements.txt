@@ -1,0 +1,2 @@
+# Deployment compatibility entry point. All transitive versions and hashes are locked.
+-r requirements.lock
