@@ -32,8 +32,8 @@ genai_client = genai.Client(api_key=api_key) if api_key else None
 if genai_client is None:
     print("WARNING: GEMINI_API_KEY tidak ditemukan; inverse endpoint akan memakai fallback lokal.")
 
-# Keep below the frontend's 6.5 s abort so the local fallback can still be returned.
-GEMINI_TIMEOUT_SECONDS = 5
+# Keep below the frontend's 15 s abort so the local fallback can still be returned.
+GEMINI_TIMEOUT_SECONDS = 12
 UNSUPPORTED_ID = "UNSUPPORTED"
 
 
