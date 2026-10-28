@@ -2,12 +2,26 @@ import asyncio
 import json
 import os
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import APIRouter
 from google import genai
 from pydantic import BaseModel, Field
+
+from app.services.lab_reactions import (
+    CONC_RANGE,
+    REACTIONS_BY_ID,
+    SUGGESTIONS,
+    TEMP_RANGE,
+    VOL_RANGE,
+    LabReaction,
+    MatchResult,
+    clamp,
+    confidence_from_score,
+    describe_for_prompt,
+    match_goal,
+)
 
 load_dotenv()
 
@@ -18,31 +32,9 @@ genai_client = genai.Client(api_key=api_key) if api_key else None
 if genai_client is None:
     print("WARNING: GEMINI_API_KEY tidak ditemukan; inverse endpoint akan memakai fallback lokal.")
 
-CHEMICAL_KNOWLEDGE_BASE = [
-    {
-        "id": "rxn_001",
-        "name": "Pembentukan Endapan Perak Klorida",
-        "reactants": ["AgNO3", "NaCl"],
-        "properties": {"color": "putih", "precipitate": "AgCl", "ph_final": "7.0"},
-    },
-    {
-        "id": "rxn_002",
-        "name": "Pembentukan Endapan Timbal Iodida",
-        "reactants": ["Pb(NO3)2", "KI"],
-        "properties": {"color": "kuning", "precipitate": "PbI2", "ph_final": "7.0"},
-    },
-    {
-        "id": "rxn_003",
-        "name": "Reaksi Netralisasi Asam Basa",
-        "reactants": ["HCl", "NaOH"],
-        "properties": {
-            "color": "bening",
-            "precipitate": None,
-            "ph_final": "7.0",
-            "energy": "Eksoterm",
-        },
-    },
-]
+# Keep below the frontend's 6.5 s abort so the local fallback can still be returned.
+GEMINI_TIMEOUT_SECONDS = 5
+UNSUPPORTED_ID = "UNSUPPORTED"
 
 
 class InverseRequest(BaseModel):
@@ -68,8 +60,9 @@ class PredictedOutcome(BaseModel):
     ph_final: str
 
 
-from app.domain.inverse_solver import Constraints, Goal, solve_inverse_experiment as solve_inverse_domain
-from app.generated.chemistry_catalog import CATALOG
+class Suggestion(BaseModel):
+    label: str
+    prompt: str
 
 
 class InverseResponse(BaseModel):
@@ -78,72 +71,83 @@ class InverseResponse(BaseModel):
     configuration: Optional[ReactionConfiguration] = None
     predicted_outcome: Optional[PredictedOutcome] = None
     explanation: str
+    supported: bool = True
+    source: str = "local"
+    reaction_id: Optional[str] = None
+    equation: Optional[str] = None
+    unsupported_terms: List[str] = Field(default_factory=list)
+    suggestions: List[Suggestion] = Field(default_factory=list)
 
 
-def build_fallback_response(goal_text: str, constraints_dict: Optional[Dict] = None) -> InverseResponse:
-    goal_lower = goal_text.lower()
-    kind = "precipitate"
-    target_product = None
-    target_color = None
+def _filter_by_constraints(reaction: LabReaction, constraints: Optional[Dict]) -> bool:
+    if not constraints:
+        return True
+    pair = {reaction.reactant_a, reaction.reactant_b}
+    forbidden = set(constraints.get("forbidden_reagents") or [])
+    allowed = constraints.get("allowed_reagents")
+    if pair & forbidden:
+        return False
+    if allowed is not None and not pair.issubset(set(allowed)):
+        return False
+    return True
 
-    if "netral" in goal_lower or "ph" in goal_lower or ("asam" in goal_lower and "basa" in goal_lower):
-        kind = "neutralization"
-    if "kuning" in goal_lower:
-        target_color = "kuning"
-    elif "putih" in goal_lower:
-        target_color = "putih"
-    elif "hitam" in goal_lower:
-        target_color = "hitam"
-    elif "coklat" in goal_lower:
-        target_color = "coklat"
-    elif "biru" in goal_lower:
-        target_color = "biru"
 
-    goal = Goal(kind=kind, target_product_id=target_product, target_color=target_color)
-
-    forbidden = ()
-    allowed = None
-    if constraints_dict:
-        if "forbidden_reagents" in constraints_dict:
-            forbidden = tuple(constraints_dict["forbidden_reagents"])
-        if "allowed_reagents" in constraints_dict:
-            allowed = tuple(constraints_dict["allowed_reagents"])
-
-    constraints = Constraints(forbidden_reagents=forbidden, allowed_reagents=allowed)
-    solution = solve_inverse_domain(goal, constraints, CATALOG)
-
-    if not solution.is_feasible or solution.configuration is None or solution.predicted_outcome is None:
-        return InverseResponse(
-            confidence_score=solution.confidence_score,
-            recommended_reaction=solution.recommended_reaction,
-            configuration=None,
-            predicted_outcome=None,
-            explanation=solution.explanation,
-        )
-
-    cfg = solution.configuration
-    out = solution.predicted_outcome
+def build_supported_response(reaction: LabReaction, confidence: int, source: str) -> InverseResponse:
+    """Build the response strictly from the lab database entry (never from AI text)."""
     return InverseResponse(
-        confidence_score=solution.confidence_score,
-        recommended_reaction=solution.recommended_reaction,
+        confidence_score=max(0, min(100, int(confidence))),
+        recommended_reaction=reaction.name,
         configuration=ReactionConfiguration(
-            reactant_a=cfg.reactant_a,
-            conc_a=cfg.conc_a,
-            vol_a=cfg.vol_a,
-            reactant_b=cfg.reactant_b,
-            conc_b=cfg.conc_b,
-            vol_b=cfg.vol_b,
-            temp=cfg.temp,
-            pressure=cfg.pressure,
+            reactant_a=reaction.reactant_a,
+            conc_a=clamp(reaction.conc_a, CONC_RANGE),
+            vol_a=clamp(50, VOL_RANGE),
+            reactant_b=reaction.reactant_b,
+            conc_b=clamp(reaction.conc_b, CONC_RANGE),
+            vol_b=clamp(50, VOL_RANGE),
+            temp=clamp(25, TEMP_RANGE),
+            pressure=1,
         ),
         predicted_outcome=PredictedOutcome(
-            color=out.color,
-            precipitate=out.precipitate,
-            gas=out.gas,
-            ph_final=out.ph_final,
+            color=reaction.color,
+            precipitate=reaction.precipitate,
+            gas=reaction.gas,
+            ph_final=reaction.ph_final,
         ),
-        explanation=solution.explanation,
+        explanation=reaction.explanation,
+        supported=True,
+        source=source,
+        reaction_id=reaction.id,
+        equation=reaction.equation,
     )
+
+
+def build_unsupported_response(goal_text: str, unsupported_terms: List[str], source: str) -> InverseResponse:
+    if unsupported_terms:
+        detail = (
+            f"The Reaction Lab can't simulate {', '.join(unsupported_terms)} yet. "
+        )
+    else:
+        detail = "This goal doesn't match any reaction the Reaction Lab can simulate yet. "
+    return InverseResponse(
+        confidence_score=0,
+        recommended_reaction="Outcome not supported in the Reaction Lab",
+        configuration=None,
+        predicted_outcome=None,
+        explanation=detail + "Try one of the supported outcomes below: precipitates (AgCl, AgI, PbI₂, PbCl₂, "
+        "PbCO₃, BaSO₄, BaCO₃, CaCO₃), CO₂ or NH₃ gas evolution, or acid-base neutralization.",
+        supported=False,
+        source=source,
+        unsupported_terms=unsupported_terms,
+        suggestions=[Suggestion(**s) for s in SUGGESTIONS],
+    )
+
+
+def build_local_response(goal_text: str, constraints: Optional[Dict] = None,
+                         match: Optional[MatchResult] = None) -> InverseResponse:
+    match = match or match_goal(goal_text)
+    if match.reaction is None or not _filter_by_constraints(match.reaction, constraints):
+        return build_unsupported_response(goal_text, match.unsupported_terms, "local")
+    return build_supported_response(match.reaction, confidence_from_score(match.score), "local")
 
 
 def extract_json(response_text: str) -> dict:
@@ -155,55 +159,73 @@ def extract_json(response_text: str) -> dict:
     return json.loads(match.group())
 
 
+def build_prompt(goal_text: str) -> str:
+    return f"""You are the ATOMVERSE Inverse Experiment selector.
+A student describes an outcome they want. You must choose ONE reaction from the database below.
+You are NOT allowed to invent reactions, reagents, or products that are not listed.
+
+DATABASE (id: reactant A + reactant B -> observable outcome):
+{describe_for_prompt()}
+
+Rules:
+- Return the id of the reaction that best produces the student's described outcome.
+- If the goal requires any substance, color, gas, or process not in the database, return "{UNSUPPORTED_ID}".
+- Reply with ONLY valid JSON: {{"reaction_id": "<id or {UNSUPPORTED_ID}>", "confidence": <integer 0-100>}}
+
+Student goal: {json.dumps(goal_text, ensure_ascii=False)}
+"""
+
+
+def resolve_ai_choice(ai_result: dict, local: MatchResult, goal_text: str,
+                      constraints: Optional[Dict]) -> InverseResponse:
+    """Validate the AI's pick against the database and the local matcher."""
+    reaction_id = str(ai_result.get("reaction_id", "")).strip()
+    try:
+        ai_confidence = int(ai_result.get("confidence", 85))
+    except (TypeError, ValueError):
+        ai_confidence = 85
+    ai_confidence = max(50, min(99, ai_confidence))
+
+    reaction = REACTIONS_BY_ID.get(reaction_id)
+
+    if reaction is None:
+        # UNSUPPORTED or an invented ID: defer to the deterministic matcher.
+        if reaction_id != UNSUPPORTED_ID:
+            print(f"Gemini mengembalikan reaction_id tidak dikenal: {reaction_id!r}; memakai matcher lokal.")
+        return build_local_response(goal_text, constraints, local)
+
+    # A strong local match of a different reaction type wins (e.g. AI picked a precipitate for a gas goal).
+    if local.reaction is not None and local.strong and local.reaction.type != reaction.type:
+        return build_local_response(goal_text, constraints, local)
+
+    if not _filter_by_constraints(reaction, constraints):
+        return build_local_response(goal_text, constraints, local)
+
+    return build_supported_response(reaction, ai_confidence, "gemini")
+
+
 @router.post("/api/inverse-experiment", response_model=InverseResponse)
 async def solve_inverse_experiment(request: InverseRequest) -> InverseResponse:
-    fallback = build_fallback_response(request.goal, request.constraints)
     print(f"Inverse request diterima: {request.goal}")
+    local = match_goal(request.goal)
+
+    # Substances/colors the lab cannot simulate are rejected before asking the AI.
+    if local.unsupported_terms:
+        return build_unsupported_response(request.goal, local.unsupported_terms, "local")
 
     if genai_client is None:
-        return fallback
-
-    goal_lower = request.goal.lower()
-    relevant_reactions = [
-        reaction
-        for reaction in CHEMICAL_KNOWLEDGE_BASE
-        if any(
-            keyword in json.dumps(reaction["properties"]).lower()
-            for keyword in goal_lower.split()
-        )
-    ] or CHEMICAL_KNOWLEDGE_BASE
-
-    prompt = f"""
-Kamu adalah ATOMVERSE AI Inverse Problem Solver.
-Tujuan pengguna: {request.goal}
-Database reaksi: {json.dumps(relevant_reactions, ensure_ascii=False)}
-
-Pilih reaksi paling sesuai dan kembalikan hanya JSON valid dengan struktur berikut:
-{{
-  "confidence_score": 92,
-  "recommended_reaction": "Nama reaksi",
-  "configuration": {{
-    "reactant_a": "AgNO3", "conc_a": 0.1, "vol_a": 50,
-    "reactant_b": "NaCl", "conc_b": 0.1, "vol_b": 50,
-    "temp": 25, "pressure": 1
-  }},
-  "predicted_outcome": {{
-    "color": "putih", "precipitate": "AgCl", "gas": null, "ph_final": "7.0"
-  }},
-  "explanation": "Penjelasan singkat"
-}}
-"""
+        return build_local_response(request.goal, request.constraints, local)
 
     try:
         response = await asyncio.wait_for(
             genai_client.aio.models.generate_content(
                 model="gemini-3.1-flash-lite",
-                contents=prompt,
+                contents=build_prompt(request.goal),
             ),
-            timeout=12,
+            timeout=GEMINI_TIMEOUT_SECONDS,
         )
-        result = extract_json(response.text)
-        return InverseResponse.model_validate(result)
+        ai_result = extract_json(response.text)
+        return resolve_ai_choice(ai_result, local, request.goal, request.constraints)
     except Exception as error:
         print(f"Gemini gagal atau timeout; memakai fallback lokal: {error}")
-        return fallback
+        return build_local_response(request.goal, request.constraints, local)
