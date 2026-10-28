@@ -11,10 +11,27 @@ from inverse_engine import router as inverse_router
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
-genai_client = genai.Client(api_key=api_key) if api_key else None
-gemini_status = "configured" if genai_client else "fallback"
-if genai_client is None:
+
+def _build_chat_clients():
+    raw_keys = [
+        os.getenv("GEMINI_CHAT_API_KEY"),
+        os.getenv("GEMINI_API_KEY"),
+        os.getenv("GEMINI_INVERSE_API_KEY"),
+    ]
+    seen = set()
+    clients = []
+    for key in raw_keys:
+        clean = (key or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            clients.append(genai.Client(api_key=clean))
+    return clients
+
+
+chat_clients = _build_chat_clients()
+genai_client = chat_clients[0] if chat_clients else None
+gemini_status = "configured" if chat_clients else "fallback"
+if not chat_clients:
     print("WARNING: GEMINI_API_KEY tidak ditemukan; fitur AI akan memakai fallback lokal.")
 
 app = FastAPI()
@@ -52,7 +69,7 @@ async def chat_with_tutor(request: ChatRequest):
     global gemini_status
 
     fallback_reply = build_chat_fallback(request.message, request.lab_state, force_en=True)
-    if genai_client is None:
+    if not chat_clients:
         gemini_status = "fallback"
         return fallback_reply.to_dict()
 
@@ -73,23 +90,28 @@ INSTRUCTIONS:
 Student question: {request.message}
 """
 
-    try:
-        response = await asyncio.wait_for(
-            genai_client.aio.models.generate_content(
-                model="gemini-3.1-flash-lite",
-                contents=prompt,
-            ),
-            timeout=12,
-        )
-        reply = response.text.strip()
-        if not reply:
-            raise ValueError("Gemini mengembalikan jawaban kosong")
-        gemini_status = "active"
-        return {"reply": reply, "source": "gemini", "scope": "answered", "degraded": False}
-    except Exception as error:
-        gemini_status = "fallback"
-        print(f"Gemini chat gagal atau timeout; memakai fallback lokal: {error}")
-        return fallback_reply.to_dict()
+    last_error = None
+    for client in chat_clients:
+        try:
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model="gemini-3.1-flash-lite",
+                    contents=prompt,
+                ),
+                timeout=12,
+            )
+            reply = (response.text or "").strip()
+            if not reply:
+                raise ValueError("Gemini mengembalikan jawaban kosong")
+            gemini_status = "active"
+            return {"reply": reply, "source": "gemini", "scope": "answered", "degraded": False}
+        except Exception as error:
+            last_error = error
+            print(f"Gemini chat attempt gagal; mencoba key berikutnya jika ada: {error}")
+
+    gemini_status = "fallback"
+    print(f"Semua Gemini chat key gagal atau timeout; memakai fallback lokal: {last_error}")
+    return fallback_reply.to_dict()
 
 
 if __name__ == "__main__":

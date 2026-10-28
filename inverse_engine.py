@@ -26,10 +26,28 @@ from app.services.lab_reactions import (
 load_dotenv()
 
 router = APIRouter()
-api_key = os.getenv("GEMINI_API_KEY")
-genai_client = genai.Client(api_key=api_key) if api_key else None
 
-if genai_client is None:
+
+def _build_inverse_clients():
+    raw_keys = [
+        os.getenv("GEMINI_INVERSE_API_KEY"),
+        os.getenv("GEMINI_API_KEY"),
+        os.getenv("GEMINI_CHAT_API_KEY"),
+    ]
+    seen = set()
+    clients = []
+    for key in raw_keys:
+        clean = (key or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            clients.append(genai.Client(api_key=clean))
+    return clients
+
+
+inverse_clients = _build_inverse_clients()
+genai_client = inverse_clients[0] if inverse_clients else None
+
+if not inverse_clients:
     print("WARNING: GEMINI_API_KEY tidak ditemukan; inverse endpoint akan memakai fallback lokal.")
 
 # Keep below the frontend's 15 s abort so the local fallback can still be returned.
@@ -213,19 +231,24 @@ async def solve_inverse_experiment(request: InverseRequest) -> InverseResponse:
     if local.unsupported_terms:
         return build_unsupported_response(request.goal, local.unsupported_terms, "local")
 
-    if genai_client is None:
+    if not inverse_clients:
         return build_local_response(request.goal, request.constraints, local)
 
-    try:
-        response = await asyncio.wait_for(
-            genai_client.aio.models.generate_content(
-                model="gemini-3.1-flash-lite",
-                contents=build_prompt(request.goal),
-            ),
-            timeout=GEMINI_TIMEOUT_SECONDS,
-        )
-        ai_result = extract_json(response.text)
-        return resolve_ai_choice(ai_result, local, request.goal, request.constraints)
-    except Exception as error:
-        print(f"Gemini gagal atau timeout; memakai fallback lokal: {error}")
-        return build_local_response(request.goal, request.constraints, local)
+    last_error = None
+    for client in inverse_clients:
+        try:
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model="gemini-3.1-flash-lite",
+                    contents=build_prompt(request.goal),
+                ),
+                timeout=GEMINI_TIMEOUT_SECONDS,
+            )
+            ai_result = extract_json(response.text)
+            return resolve_ai_choice(ai_result, local, request.goal, request.constraints)
+        except Exception as error:
+            last_error = error
+            print(f"Gemini inverse attempt gagal; mencoba key berikutnya jika ada: {error}")
+
+    print(f"Semua Gemini inverse key gagal atau timeout; memakai fallback lokal: {last_error}")
+    return build_local_response(request.goal, request.constraints, local)
